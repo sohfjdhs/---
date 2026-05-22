@@ -6,6 +6,10 @@ import os
 import random
 import math
 from datetime import datetime, timezone, timedelta
+from dotenv import load_dotenv
+
+load_dotenv()
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
