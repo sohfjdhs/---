@@ -800,4 +800,4 @@ async def trigger_random_news(interaction: discord.Interaction):
     # 6. 전 서버 유저들이 볼 수 있게 속보 전송 (ephemeral=False)
     await interaction.response.send_message(embed=embed, ephemeral=False)
 
-bot.run("MTUwNDc2NDAxODIwMjY0NDU3Mw.Gt6tkl.2CYpltR9pSpWsOGwPaIFump8jXMu5lQHhqKjk8")
+bot.run(os.getenv("DISCORD_TOKEN"))
