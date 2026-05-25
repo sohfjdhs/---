@@ -7,7 +7,22 @@
         "last_attendance": "2026-05-25"
     },
     "796981646460715020": {
-        "money": 530357,
+        "money": 0,
+        "debt": 1060900,
+        "bank": "A",
+        "stocks": {},
+        "last_attendance": "2026-05-25",
+        "futures": [
+            {
+                "stock_name": "LG전자",
+                "position": "LONG",
+                "leverage": 5,
+                "bet_money": 1530357
+            }
+        ]
+    },
+    "1106143697659248640": {
+        "money": 530689,
         "debt": 0,
         "bank": "None",
         "stocks": {},
