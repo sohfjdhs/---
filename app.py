@@ -273,11 +273,65 @@ class StockBuyView(discord.ui.View):
         embed.add_field(name="💸 총 결제 금액", value=f"**{total_cost:,} 원**", inline=False)
         await interaction.response.edit_message(content=None, embed=embed, view=None)
 
-@bot.tree.command(name="주식구매", description="상장된 주식을 선택하고 원하는 수량만큼 구매합니다. (나에게만 보임)")
-async def buy_stock_command(interaction: discord.Interaction):
-    current_stocks = load_data(STOCKS_FILE, {})
-    if not current_stocks: return await interaction.response.send_message("❌ 상장된 기업이 없습니다.", ephemeral=True)
-    await interaction.response.send_message(content="🛒 **가상 주식 매수 시스템**\n드롭다운에서 기업을 선택해 주세요!", view=StockBuyView(current_stocks), ephemeral=True)
+@bot.tree.command(name="주식구매", description="특정 주식을 지정한 수량만큼 즉시 구매합니다.")
+@app_commands.describe(주식이름="구매할 기업의 이름", 수량="구매할 주식 수량 (이상)")
+async def buy_stock(interaction: discord.Interaction, 주식이름: str, 수량: int):
+    global market_status, user_wallets, stock_data
+    
+    # 1. 개장 상태 체크
+    if not market_status["is_open"]:
+        await interaction.response.send_message("🔴 현재는 주식 시장 운영 시간이 아닙니다.", ephemeral=True)
+        return
+        
+    # 2. 마감 타임아웃 자동 폐장 체크
+    if market_status["close_time"]:
+        current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if current_time_str > market_status["close_time"]:
+            market_status["is_open"] = False
+            await interaction.response.send_message("🔴 지정된 마감 시간이 지나 주식 시장이 마감되었습니다.", ephemeral=False)
+            return
+
+    # 3. 데이터 로드 및 유효성 검사
+    user_id = str(interaction.user.id)
+    user_wallets = load_data(USERS_FILE, {})
+    stock_data = load_data(STOCKS_FILE, {})
+
+    if user_id not in user_wallets:
+        return await interaction.response.send_message("❌ 가입되지 않은 유저입니다. `/주식시작` 명령어로 먼저 가입하세요.", ephemeral=True)
+        
+    if 주식이름 not in stock_data:
+        return await interaction.response.send_message(f"❌ '{주식이름}'은(는) 존재하지 않는 기업입니다.", ephemeral=True)
+        
+    if 수량 <= 0:
+        return await interaction.response.send_message("❌ 수량은 1주 이상이어야 합니다.", ephemeral=True)
+
+    # 4. 잔액 검사 및 구매 처리
+    current_price = stock_data[주식이름]["price"]
+    total_cost = current_price * 수량
+    user_money = user_wallets[user_id].get("money", 0)
+
+    if user_money < total_cost:
+        return await interaction.response.send_message(
+            f"❌ 잔액이 부족합니다.\n└ 필요 금액: `{total_cost:,}원` | 보유 금액: `{user_money:,}원`", 
+            ephemeral=True
+        )
+
+    # 5. 자산 반영 및 저장
+    if "stocks" not in user_wallets[user_id]:
+        user_wallets[user_id]["stocks"] = {}
+        
+    user_wallets[user_id]["stocks"][주식이름] = user_wallets[user_id]["stocks"].get(주식이름, 0) + 수량
+    user_wallets[user_id]["money"] -= total_cost
+    save_data(USERS_FILE, user_wallets)
+
+    # 6. 완료 영수증 출력
+    embed = discord.Embed(title="📥 주식 매수 체결 완료", color=discord.Color.blue())
+    embed.add_field(name="🏢 종목명", value=주식이름, inline=True)
+    embed.add_field(name="📊 체결 수량", value=f"{수량:,} 주", inline=True)
+    embed.add_field(name="💸 총 결제 금액", value=f"**{total_cost:,} 원**", inline=False)
+    embed.set_footer(text=f"남은 현금 잔액: {user_wallets[user_id]['money']:,}원")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=False)
 
 # 📤 주식 매도 UI 핸들러
 class StockSellSelect(discord.ui.Select):
@@ -804,5 +858,56 @@ async def trigger_random_news(interaction: discord.Interaction):
 
     # 6. 전 서버 유저들이 볼 수 있게 속보 전송 (ephemeral=False)
     await interaction.response.send_message(embed=embed, ephemeral=False)
+
+@bot.tree.command(name="강제개장", description="[관리자 전용] 주식 시장의 시작 시간과 종료 시간을 강제로 지정하여 개장합니다.")
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.describe(
+    시작시간="개장할 시간 (형식: HH:MM 예: 09:00)",
+    종료시간="폐장할 시간 (형식: HH:MM 예: 18:00)"
+)
+async def force_open_market(interaction: discord.Interaction, 시작시간: str, 종료시간: str):
+    try:
+        now = datetime.now()
+        
+        # 입력받은 시간자체를 파싱 ("09:30" -> time 객체)
+        parsed_open = datetime.strptime(시작시간, "%H:%M").time()
+        parsed_close = datetime.strptime(종료시간, "%H:%M").time()
+        
+        # 오늘 날짜와 합쳐서 풀 데이트타임 생성
+        full_open_time = datetime.combine(now.date(), parsed_open)
+        full_close_time = datetime.combine(now.date(), parsed_close)
+        
+        if full_close_time <= full_open_time:
+            await interaction.response.send_message("❌ 종료 시간은 시작 시간보다 늦어야 합니다.", ephemeral=True)
+            return
+
+        # 전역 상태 변수 업데이트
+        global market_status
+        market_status["is_open"] = True
+        market_status["open_time"] = full_open_time.strftime("%Y-%m-%d %H:%M")
+        market_status["close_time"] = full_close_time.strftime("%Y-%m-%d %H:%M")
+
+        # 전 채널 알림용 대형 임베드
+        embed = discord.Embed(
+            title="🔔 [주식 시장 강제 개장 통보]",
+            description="관리자의 권한으로 주식 시장이 임시 개장되었습니다!",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="🔓 시장 상태", value="**🟢 거래 가능 (OPEN)**", inline=True)
+        embed.add_field(name="⏰ 운영 기간", value=f"**{시작시간}** ~ **{종료시간}** (당일 기준)", inline=True)
+        embed.set_footer(text="※ 지정된 운영 시간 외에는 거래 기능이 제한됩니다.")
+
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    except ValueError:
+        await interaction.response.send_message(
+            "❌ 시간 형식이 올바르지 않습니다.\n**HH:MM** 형태로 입력해 주세요! (예: `09:30`, `17:00`)", 
+            ephemeral=True
+        )
+
+@force_open_market.error
+async def force_open_market_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.errors.MissingPermissions):
+        await interaction.response.send_message("❌ 이 명령어는 서버 관리자만 사용할 수 있습니다.", ephemeral=True)
 
 bot.run(os.getenv("DISCORD_TOKEN"))
